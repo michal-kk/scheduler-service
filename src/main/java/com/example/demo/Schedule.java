@@ -1,6 +1,8 @@
 package com.example.demo;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
@@ -18,7 +20,7 @@ public class Schedule {
   private Instant lastRun = null;
   private Instant nextRun = null;
 
-  private String description;
+  private List<String> runs = new ArrayList<>();
 
   public String getId() {
     return id;
@@ -60,11 +62,11 @@ public class Schedule {
     this.nextRun = nextRun;
   }
 
-  public String getDescription() {
-    return description;
+  public List<String> getRuns() {
+    return runs;
   }
 
-  public void setDescription(String description) {
-    this.description = description;
+  public void setRuns(List<String> runs) {
+    this.runs = runs;
   }
 }

@@ -5,7 +5,8 @@ import java.util.Date;
 
 import org.springframework.scheduling.support.CronSequenceGenerator;
 
-class CronSequenceGeneratorInstantAdapter {
+public class CronSequenceGeneratorInstantAdapter {
+
   private CronSequenceGenerator cronSequenceGeneratorInstance;
 
   CronSequenceGeneratorInstantAdapter(String expression) {
