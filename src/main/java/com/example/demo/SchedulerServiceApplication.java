@@ -5,7 +5,6 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.annotation.PostConstruct;
 
@@ -29,26 +28,24 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @SpringBootApplication
 @RestController
 @EnableScheduling
 public class SchedulerServiceApplication {
-  private static final String ZOOKEEPER_CONN_STR = "0.0.0.0:2181";
   private static final String ZOOKEEPER_PATH = "/examples/lock";
 
   private static final Logger log = LoggerFactory.getLogger(SchedulerServiceApplication.class);
-
-  private AtomicBoolean active = new AtomicBoolean(false);
 
   private CuratorFramework client = null;
 
   @PostConstruct
   private void initZookeper() throws Exception {
+    String zookeeperConnStr = "0.0.0.0:2181";
+
     RetryPolicy retryPolicy = new ExponentialBackoffRetry(1000, 3);
-    client = CuratorFrameworkFactory.newClient(ZOOKEEPER_CONN_STR, retryPolicy);
+    client = CuratorFrameworkFactory.newClient(zookeeperConnStr, retryPolicy);
     client.start();
 
     client.blockUntilConnected();
@@ -102,22 +99,8 @@ public class SchedulerServiceApplication {
     return repository.findOne(Example.of(schedule));
   }
 
-  @RequestMapping(value = "/start")
-  public void start() {
-    active.set(true);
-  }
-
-  @RequestMapping(value = "/stop")
-  public void stop() {
-    active.set(false);
-  }
-
   @Scheduled(fixedRate = 1000)
   public void run() throws Exception {
-    if (!active.get()) {
-      return;
-    }
-
     log.info("Starting task");
 
     InterProcessLock lock = new InterProcessMutex(client, ZOOKEEPER_PATH);
