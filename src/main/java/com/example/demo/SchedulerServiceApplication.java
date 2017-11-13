@@ -1,19 +1,18 @@
 package com.example.demo;
 
+import java.io.IOException;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
 
 import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
-import org.apache.curator.framework.recipes.locks.InterProcessLock;
-import org.apache.curator.framework.recipes.locks.InterProcessMutex;
+import org.apache.curator.framework.recipes.leader.LeaderLatch;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,32 +28,39 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @SpringBootApplication
 @RestController
 @EnableScheduling
 public class SchedulerServiceApplication {
-  private static final String ZOOKEEPER_CONN_STR = "0.0.0.0:2181";
-  private static final String ZOOKEEPER_PATH = "/examples/lock";
 
   private static final Logger log = LoggerFactory.getLogger(SchedulerServiceApplication.class);
 
-  private AtomicBoolean active = new AtomicBoolean(false);
-
-  private CuratorFramework client = null;
+  private LeaderLatch leaderLatch = null;
 
   @PostConstruct
   private void initZookeper() throws Exception {
+    String zookeeperPath = "/examples/lock";
+    String zookeeperConnStr = "0.0.0.0:2181";
+
     RetryPolicy retryPolicy = new ExponentialBackoffRetry(1000, 3);
-    client = CuratorFrameworkFactory.newClient(ZOOKEEPER_CONN_STR, retryPolicy);
+    CuratorFramework client =
+        CuratorFrameworkFactory.newClient(zookeeperConnStr, 5000, 20000, retryPolicy);
     client.start();
 
     client.blockUntilConnected();
-    if (client.checkExists().forPath(ZOOKEEPER_PATH) == null) {
-      client.create().creatingParentsIfNeeded().forPath(ZOOKEEPER_PATH);
+    if (client.checkExists().forPath(zookeeperPath) == null) {
+      client.create().creatingParentsIfNeeded().forPath(zookeeperPath);
     }
+
+    leaderLatch = new LeaderLatch(client, zookeeperPath);
+    leaderLatch.start();
+  }
+
+  @PreDestroy
+  private void closeLatch() throws IOException {
+    leaderLatch.close();
   }
 
   @Autowired
@@ -102,68 +108,42 @@ public class SchedulerServiceApplication {
     return repository.findOne(Example.of(schedule));
   }
 
-  @RequestMapping(value = "/start")
-  public void start() {
-    active.set(true);
-  }
-
-  @RequestMapping(value = "/stop")
-  public void stop() {
-    active.set(false);
-  }
-
   @Scheduled(fixedRate = 1000)
   public void run() throws Exception {
-    if (!active.get()) {
+    if (!leaderLatch.hasLeadership()) {
+      log.info("no leadership");
       return;
     }
 
     log.info("Starting task");
 
-    InterProcessLock lock = new InterProcessMutex(client, ZOOKEEPER_PATH);
+    List<Schedule> schedules = repository.findAll();
 
-    log.info("Acquiring lock");
+    for (Schedule schedule : schedules) {
+      if (schedule.getLastRun() != null) {
+        if (schedule.getNextRun().isBefore(Instant.now())) {
+          log.info("Running {}", schedule.getName());
 
-    if (lock.acquire(1l, TimeUnit.SECONDS)) {
-      try {
-        log.info("Running tasks");
+          Instant lastRun = Instant.now();
 
-        List<Schedule> schedules = repository.findAll();
+          CronSequenceGeneratorInstantAdapter adapter =
+              new CronSequenceGeneratorInstantAdapter(schedule.getCron());
+          Instant nextRun = adapter.next(lastRun);
 
-        for (Schedule schedule : schedules) {
-          if (schedule.getLastRun() != null) {
-            if (schedule.getNextRun().isBefore(Instant.now())) {
-              log.info("Running {}", schedule.getName());
+          schedule.getRuns()
+              .add(String.format("%s@%s", lastRun.atZone(ZoneId.systemDefault()).toString(),
+                  environment.getProperty("local.server.port")));
+          schedule.setLastRun(lastRun);
+          schedule.setNextRun(nextRun);
 
-              Instant lastRun = Instant.now();
-
-              CronSequenceGeneratorInstantAdapter adapter =
-                  new CronSequenceGeneratorInstantAdapter(schedule.getCron());
-              Instant nextRun = adapter.next(lastRun);
-
-              schedule.getRuns()
-                  .add(String.format("%s@%s", lastRun.atZone(ZoneId.systemDefault()).toString(),
-                      environment.getProperty("local.server.port")));
-              schedule.setLastRun(lastRun);
-              schedule.setNextRun(nextRun);
-
-              repository.save(schedule);
-            }
-          } else {
-            log.info("Running {}", schedule.getName());
-            schedule.setLastRun(Instant.now());
-
-            repository.save(schedule);
-          }
+          repository.save(schedule);
         }
-      } finally {
-        // Uncomment the line below to see the lock working:
-        // Thread.sleep(800);
-        log.info("Releasing lock");
-        lock.release();
+      } else {
+        log.info("Running {}", schedule.getName());
+        schedule.setLastRun(Instant.now());
+
+        repository.save(schedule);
       }
-    } else {
-      log.info("Unable to acquire lock");
     }
   }
 }
