@@ -101,11 +101,7 @@ public class SchedulerServiceApplication {
         new CronSequenceGeneratorInstantAdapter(schedule.getCron());
     schedule.setNextRun(generatorInstantAdapter.next(Instant.now()));
 
-    repository.save(schedule);
-
-    Schedule exampleSchedule = new Schedule();
-    exampleSchedule.setName(schedule.getName());
-    return repository.findOne(Example.of(schedule));
+    return repository.save(schedule);
   }
 
   @Scheduled(fixedRate = 1000)
